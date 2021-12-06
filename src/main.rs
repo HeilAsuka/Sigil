@@ -13,10 +13,10 @@ use structopt::StructOpt;
 pub struct Cli {
     #[structopt(short = "l", long = "local", help = "Local address and port")]
     /// Specify the listening address i.e. 127.0.0.1:8080
-    pub local: Option<String>,
+    pub local: String,
     #[structopt(short = "r", long = "remote", help = "Remote address and port")]
     /// Specify the remote address to proxy to i.e. 10.0.1.100:5900
-    pub remote: Option<String>,
+    pub remote: String,
 }
 
 pub fn parse_cli() -> Cli {
@@ -28,14 +28,17 @@ pub fn parse_cli() -> Cli {
 
 fn main() -> io::Result<()> {
     let args = parse_cli();
+    let remote_addr = args.remote.parse::<SocketAddr>().unwrap();
     smol::block_on(async {
-        let tcp_listener: TcpListener = TcpListener::bind(args.local.unwrap())
+        let tcp_listener: TcpListener = TcpListener::bind(args.local)
             .await
             .expect("bind loacl listener failed");
-        let remote_addr = args.remote.as_ref().unwrap();
         loop {
             match tcp_listener.accept().await {
-                Ok((tcpstream, _)) => tcp_forwarding(tcpstream, remote_addr).await?,
+                Ok((tcpstream, _)) => {
+                    let tcp_forwarding = tcp_forwarding(tcpstream, remote_addr);
+                    smol::spawn(tcp_forwarding).detach();
+                }
                 Err(e) => println!("{:?}", e),
             }
         }
@@ -51,7 +54,8 @@ async fn tcp_forwarding<S: AsyncToSocketAddrs>(
         .await
         .expect("Failed to connect");
     outbound.set_nodelay(true).expect("Failed to set nodelay");
-    let (mut ri, mut wi): (io::ReadHalf<TcpStream>, io::WriteHalf<TcpStream>) = io::split(tcpstream);
+    let (mut ri, mut wi): (io::ReadHalf<TcpStream>, io::WriteHalf<TcpStream>) =
+        io::split(tcpstream);
     let (mut ro, mut wo): (io::ReadHalf<TcpStream>, io::WriteHalf<TcpStream>) = io::split(outbound);
     let inbound_to_outbound = io::copy(&mut ri, &mut wo);
     let outbound_to_inbound = io::copy(&mut ro, &mut wi);
