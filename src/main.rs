@@ -17,6 +17,14 @@ struct Cli {
     #[structopt(short = "r", long = "remote", help = "Remote address and port")]
     /// Specify the remote address to proxy to i.e. 10.0.1.100:5900
     remote: String,
+    #[structopt(
+        short = "t",
+        long = "threads",
+        help = "Number of threads to use",
+        default_value = "4"
+    )]
+    /// Specify the number of threads to use, default value is 4
+    threads: usize,
 }
 
 fn parse_cli() -> Cli {
@@ -30,7 +38,7 @@ fn set_thread_number<T: ToString>(thread_num: T) {
 }
 fn main() -> io::Result<()> {
     let args = parse_cli();
-    set_thread_number(4);
+    set_thread_number(args.threads);
     let remote_addr = args.remote.parse::<SocketAddr>().unwrap();
     smol::block_on(async {
         let tcp_listener: TcpListener = TcpListener::bind(args.local).await?;
