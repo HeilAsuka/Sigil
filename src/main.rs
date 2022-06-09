@@ -1,6 +1,8 @@
+use std::net::{IpAddr, Ipv4Addr};
+
 use smol::future::zip;
 use smol::io;
-use smol::net::{AsyncToSocketAddrs, SocketAddr, TcpListener, TcpStream};
+use smol::net::{AsyncToSocketAddrs, SocketAddr, TcpListener, TcpStream, UdpSocket};
 use structopt::StructOpt;
 
 #[derive(StructOpt, Debug)]
