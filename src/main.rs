@@ -1,7 +1,9 @@
-use smol::future::zip;
-use smol::io;
-use smol::net::{AsyncToSocketAddrs, SocketAddr, TcpListener, TcpStream};
+use anyhow::{Result, Ok};
 use structopt::StructOpt;
+use tokio::{
+    io::AsyncWriteExt,
+    net::{TcpListener, TcpStream, ToSocketAddrs},
+};
 
 #[derive(StructOpt, Debug)]
 #[structopt(name = "Sigil", about = "A TCP forwarding tool.")]
@@ -17,14 +19,14 @@ struct Cli {
     #[structopt(short = "r", long = "remote", help = "Remote address and port")]
     /// Specify the remote address to proxy to i.e. 10.0.1.100:5900
     remote: String,
-    #[structopt(
-        short = "t",
-        long = "threads",
-        help = "Number of threads to use",
-        default_value = "4"
-    )]
-    /// Specify the number of threads to use, default value is 4
-    threads: usize,
+    // #[structopt(
+    //     short = "t",
+    //     long = "threads",
+    //     help = "Number of threads to use",
+    //     default_value = "4"
+    // )]
+    // /// Specify the number of threads to use, default value is 4
+    // threads: usize,
 }
 
 fn parse_cli() -> Cli {
@@ -33,45 +35,42 @@ fn parse_cli() -> Cli {
         e.exit();
     })
 }
-fn set_thread_number<T: ToString>(thread_num: T) {
-    std::env::set_var("SMOL_THREADS", thread_num.to_string());
-}
-fn main() -> io::Result<()> {
+#[tokio::main]
+async fn main() -> Result<()> {
     let args = parse_cli();
-    set_thread_number(args.threads);
-    let remote_addr = args.remote.parse::<SocketAddr>().unwrap();
-    smol::block_on(async {
-        let tcp_listener: TcpListener = TcpListener::bind(args.local).await?;
-        loop {
-            match tcp_listener.accept().await {
-                Ok((tcpstream, _)) => {
-                    let tcp_forwarding = tcp_forwarding(tcpstream, remote_addr);
-                    smol::spawn(tcp_forwarding).detach();
-                }
-                Err(e) => println!("{:?}", e),
-            }
-        }
-    })
+    let remote_addr = args.remote.to_owned();
+    let local_addr = args.local.to_owned();
+    start_tcp_forwarding(&local_addr, &remote_addr).await?;
+    Ok(())
 }
 
-async fn tcp_forwarding<S: AsyncToSocketAddrs>(
-    tcpstream: TcpStream,
-    remote_addr: S,
-) -> io::Result<()> {
-    tcpstream.set_nodelay(true)?;
-    let remote_addr: SocketAddr = remote_addr.to_socket_addrs().await.unwrap().next().unwrap();
-    let outbound = TcpStream::connect(remote_addr).await?;
-    outbound.set_nodelay(true)?;
-    let (mut ri, mut wi): (io::ReadHalf<TcpStream>, io::WriteHalf<TcpStream>) =
-        io::split(tcpstream);
-    let (mut ro, mut wo): (io::ReadHalf<TcpStream>, io::WriteHalf<TcpStream>) = io::split(outbound);
-    let inbound_to_outbound = io::copy(&mut ri, &mut wo);
-    let outbound_to_inbound = io::copy(&mut ro, &mut wi);
-    let (inbound_to_outbound, outbound_to_inbound) =
-        zip(inbound_to_outbound, outbound_to_inbound).await;
-    match (inbound_to_outbound, outbound_to_inbound) {
-        (Ok(_), Ok(_)) => Ok(()),
-        (Err(e), _) => Err(e),
-        (_, Err(e)) => Err(e),
+async fn start_tcp_forwarding(localaddr: &str, remote_addr: &str) -> Result<()> {
+    let locallistener = TcpListener::bind(localaddr).await?;
+    loop {
+        let (incoming, _) = locallistener.accept().await?;
+        let remote_addr = remote_addr.to_owned();
+        tokio::spawn(async move{
+            if let Err(e) = tcp_forwarding(incoming, remote_addr).await {
+                println!("{}", e);
+            };
+        });
     }
+}
+
+async fn tcp_forwarding<S: ToSocketAddrs>(mut incoming: TcpStream, remote_addr: S) -> Result<()> {
+    let mut outgoing = TcpStream::connect(remote_addr).await?;
+    let (mut ri, mut wi) = incoming.split();
+    let (mut ro, mut wo) = outgoing.split();
+    let incoming_to_outgoing = async {
+        tokio::io::copy(&mut ri, &mut wo).await?;
+        wo.shutdown().await?;
+        Ok(())
+    };
+    let outgoing_to_incoming = async {
+        tokio::io::copy(&mut ro, &mut wi).await?;
+        wi.shutdown().await?;
+        Ok(())
+    };
+    tokio::try_join!(incoming_to_outgoing, outgoing_to_incoming)?;
+    Ok(())
 }
