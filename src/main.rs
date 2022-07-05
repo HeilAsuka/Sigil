@@ -1,10 +1,11 @@
-use anyhow::{Ok, Result};
+use std::net::SocketAddr;
+
+use anyhow::Result;
 use clap::Parser;
-use tokio::net::ToSocketAddrs;
-use tokio::{
-    io::copy_bidirectional,
-    net::{TcpListener, TcpStream},
-};
+
+use tokio::io::copy_bidirectional;
+use tokio::net::{TcpListener, TcpStream, ToSocketAddrs, UdpSocket};
+
 /// A TCP forwarding tool
 ///
 /// To proxy all tcp traffic on localhost port 8080 to remote host 10.0.1.100 port 5900 you can run:
@@ -24,7 +25,7 @@ struct Args {
 }
 
 fn parse_cli() -> Args {
-    Args::from_args_safe().unwrap_or_else(|e: clap::Error| {
+    Args::try_parse().unwrap_or_else(|e: clap::Error| {
         println!("{}", e);
         e.exit();
     })
@@ -34,12 +35,15 @@ async fn main() -> Result<()> {
     let args = parse_cli();
     let remote_addr = args.remote.to_owned();
     let local_addr = args.local.to_owned();
-    start_tcp_forwarding(&local_addr, &remote_addr).await?;
+    let (_a, _b) = tokio::join!(
+        start_tcp_forwarding(&local_addr, &remote_addr),
+        start_udp_forwarding(&local_addr, &remote_addr)
+    );
     Ok(())
 }
 
-async fn start_tcp_forwarding(localaddr: &str, remote_addr: &str) -> Result<()> {
-    let locallistener = TcpListener::bind(localaddr).await?;
+async fn start_tcp_forwarding(local_addr: &str, remote_addr: &str) -> Result<()> {
+    let locallistener = TcpListener::bind(local_addr).await?;
     loop {
         let (incoming, _) = locallistener.accept().await?;
         let remote_addr = remote_addr.to_owned();
@@ -55,4 +59,29 @@ async fn tcp_forwarding<S: ToSocketAddrs>(mut incoming: TcpStream, remote_addr: 
     let mut outgoing = TcpStream::connect(remote_addr).await?;
     copy_bidirectional(&mut incoming, &mut outgoing).await?;
     Ok(())
+}
+
+async fn start_udp_forwarding(local_addr: &str, remote_addr: &str) -> Result<()> {
+    let locallistener = UdpSocket::bind(local_addr).await?;
+    let mut recv_buf = [0u8; 4096];
+    let mut client_addr: Option<SocketAddr> = None;
+    loop {
+        match locallistener.recv_from(&mut recv_buf).await {
+            Ok((n, addr)) => {
+                if addr.to_string() == remote_addr && client_addr != None {
+                    locallistener
+                        .send_to(&recv_buf[..n], client_addr.unwrap())
+                        .await?;
+                } else {
+                    if client_addr == None {
+                        client_addr = Some(addr)
+                    } else if client_addr != Some(addr) {
+                        client_addr = Some(addr)
+                    }
+                    locallistener.send_to(&recv_buf[..n], remote_addr).await?;
+                }
+            }
+            Err(e) => panic!("{:?}", e),
+        }
+    }
 }
