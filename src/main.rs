@@ -1,10 +1,8 @@
-use std::net::SocketAddr;
-
 use anyhow::Result;
 use clap::Parser;
 
 use tokio::io::copy_bidirectional;
-use tokio::net::{TcpListener, TcpStream, ToSocketAddrs, UdpSocket};
+use tokio::net::{TcpListener, TcpStream, ToSocketAddrs};
 
 /// A TCP forwarding tool
 ///
@@ -35,9 +33,7 @@ async fn main() -> Result<()> {
     let args = parse_cli();
     let remote_addr = args.remote.to_owned();
     let local_addr = args.local.to_owned();
-    let _a = tokio::join!(
-        start_tcp_forwarding(&local_addr, &remote_addr),
-    );
+    let _a = tokio::join!(start_tcp_forwarding(&local_addr, &remote_addr),);
     Ok(())
 }
 
