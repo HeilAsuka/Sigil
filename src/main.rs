@@ -1,7 +1,7 @@
 use anyhow::Result;
 use clap::Parser;
 
-use tokio::io::{copy_bidirectional, AsyncReadExt, AsyncWriteExt}; // import AsyncReadExt and AsyncWriteExt traits
+use tokio::io::copy_bidirectional;
 use tokio::net::{TcpListener, TcpStream, ToSocketAddrs};
 
 /// Command line arguments for Sigil.
@@ -43,7 +43,8 @@ async fn start_tcp_forwarding(listening_addr: &str, remote_addr: &str) -> Result
         let (incoming, _) = listener.accept().await?; // accept a new TCP connection
         let remote_addr = remote_addr.to_owned();
         tokio::spawn(async move {
-            if let Err(e) = tcp_forwarding(incoming, remote_addr).await { // start the TCP forwarding
+            if let Err(e) = tcp_forwarding(incoming, remote_addr).await {
+                // start the TCP forwarding
                 println!("{}", e);
             }
         });
@@ -53,9 +54,6 @@ async fn start_tcp_forwarding(listening_addr: &str, remote_addr: &str) -> Result
 /// Perform TCP forwarding between a local client and a remote server.
 async fn tcp_forwarding<S: ToSocketAddrs>(mut incoming: TcpStream, remote_addr: S) -> Result<()> {
     let mut outgoing = TcpStream::connect(remote_addr).await?; // connect to the remote server
-    tokio::select! {
-        result = copy_bidirectional(&mut incoming, &mut outgoing) => result?, // copy from incoming stream to outgoing stream
-        result = copy_bidirectional(&mut outgoing, &mut incoming) => result?, // copy from outgoing stream to incoming stream
-    }
+    copy_bidirectional(&mut incoming, &mut outgoing).await?; // copy the bidirectional stream
     Ok(())
 }
